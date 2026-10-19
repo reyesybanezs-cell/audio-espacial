@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transparencia por Cable</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #000;
+      color: #fff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 16px;
+    }
+    .card {
+      background: #1c1c1e;
+      border: 1px solid #2c2c2e;
+      border-radius: 20px;
+      padding: 24px;
+      width: 100%;
+      max-width: 380px;
+    }
+    h2 { margin: 0 0 8px 0; font-size: 1.3rem; text-align: center; }
+    p.desc { color: #8e8e93; font-size: 0.85rem; text-align: center; margin-bottom: 20px; }
+    
+    .field {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: #aaa;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    select, input[type="range"] {
+      width: 100%;
+      background: #2c2c2e;
+      color: #fff;
+      border: 1px solid #3a3a3c;
+      padding: 12px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      outline: none;
+    }
+    button {
+      background: #30d158;
+      color: #000;
+      font-weight: bold;
+      border: none;
+      padding: 16px;
+      border-radius: 50px;
+      width: 100%;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 10px;
+      transition: background 0.2s;
+    }
+    button.active {
+      background: #ff453a;
+      color: #fff;
+    }
+    .vol-label {
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>Escucha Ambiental</h2>
+  <p class="desc">Audífonos por Cable + Micrófono del Celular</p>
+
+  <div class="field">
+    <label for="micSelect">Entrada de Micrófono</label>
+    <select id="micSelect">
+      <option value="">Toca 'Cargar Micrófonos'...</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <div class="vol-label">
+      <label for="volume">Volumen Ambiental</label>
+      <span id="volVal" style="font-size: 0.8rem; color:#30d158;">100%</span>
+    </div>
+    <input type="range" id="volume" min="0" max="300" value="100">
+  </div>
+
+  <button id="toggleBtn">1. Cargar / Activar Micrófono</button>
+</div>
+
+<script>
+  let audioCtx = null;
+  let micStream = null;
+  let gainNode = null;
+  let isRunning = false;
+
+  const toggleBtn = document.getElementById('toggleBtn');
+  const micSelect = document.getElementById('micSelect');
+  const volumeSlider = document.getElementById('volume');
+  const volVal = document.getElementById('volVal');
+
+  // Ajustar volumen en tiempo real
+  volumeSlider.addEventListener('input', (e) => {
+    const val = e.target.value;
+    volVal.textContent = val + '%';
+    if (gainNode) {
+      gainNode.gain.value = val / 100;
+    }
+  });
+
+  // Obtener lista de micrófonos (identifica el del celular vs audífonos)
+  async function listMics() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(d => d.kind === 'audioinput');
+      
+      micSelect.innerHTML = '';
+      audioInputs.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        // Nombre descriptivo si el navegador lo proporciona
+        option.text = device.label || `Micrófono ${index + 1} (Elegir si es del teléfono)`;
+        micSelect.appendChild(option);
+      });
+    } catch (e) {
+      console.error("Error al enumerar micrófonos", e);
+    }
+  }
+
+  toggleBtn.addEventListener('click', async () => {
+    if (!isRunning) {
+      await startAudio();
+    } else {
+      stopAudio();
+    }
+  });
+
+  async function startAudio() {
+    try {
+      const selectedDeviceId = micSelect.value;
+      
+      // Configuración estricta para evitar "Modo Llamada" y no pausar música
+      const constraints = {
+        audio: {
+          echoCancellation: false,  // CRÍTICO: Evita pausar la música/Spotify
+          noiseSuppression: false,  // CRÍTICO: Mantiene audio en modo multimedia
+          autoGainControl: false,
+          googEchoCancellation: false,
+          googNoiseSuppression: false,
+          googAutoGainControl: false,
+          latency: 0
+        }
+      };
+
+      if (selectedDeviceId) {
+        constraints.audio.deviceId = { exact: selectedDeviceId };
+      }
+
+      // Pedir stream de micrófono
+      micStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      // Enumerar micrófonos con etiquetas legibles una vez que se concede el permiso
+      await listMics();
+
+      // AudioContext nativo sincronizado al procesador de Samsung
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+        latencyHint: 0,
+        sampleRate: 48000
+      });
+
+      const source = audioCtx.createMediaStreamSource(micStream);
+      gainNode = audioCtx.createGain();
+      gainNode.gain.value = volumeSlider.value / 100;
+
+      // Conexión directa
+      source.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      isRunning = true;
+      toggleBtn.textContent = 'Desactivar Escucha';
+      toggleBtn.classList.add('active');
+    } catch (err) {
+      alert('Error: ' + err.message + '\nAsegúrate de usar HTTPS y dar permisos.');
+    }
+  }
+
+  function stopAudio() {
+    if (micStream) {
+      micStream.getTracks().forEach(track => track.stop());
+    }
+    if (audioCtx) {
+      audioCtx.close();
+    }
+    isRunning = false;
+    toggleBtn.textContent = 'Activar Micrófono';
+    toggleBtn.classList.remove('active');
+  }
+</script>
+</body>
+</html>
